@@ -1,0 +1,858 @@
+{
+  "name": "Market Research Agent - Competitor Analysis (Project 3A)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "market-research",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook_trigger",
+      "name": "Webhook - Start Research",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1400,
+        0
+      ],
+      "webhookId": "market-research-agent"
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "company_name",
+              "type": "string",
+              "value": "={{ $json.body.company_name.trim() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "normalize_input",
+      "name": "Normalize Input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -1180,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tavily.com/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.TAVILY_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.company_name + ' top 3 competitors', max_results: 8, topic: \"general\" }) }}"
+      },
+      "id": "agent1_search",
+      "name": "Agent 1: Tavily Search - Discover Competitors",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -960,
+        0
+      ],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tokenfactory.nebius.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.NEBIUS_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"Qwen/Qwen3-30B-A3B-Instruct-2507\",\n  temperature: 0.2,\n  messages: [\n    { role: \"system\", content: \"You are Agent 1, a competitor-discovery agent. Given raw search results about a company, identify its 3 closest real-world competitors. Reply with ONLY a JSON array of 3 strings, no prose, e.g. [\\\"Competitor A\\\",\\\"Competitor B\\\",\\\"Competitor C\\\"].\" },\n    { role: \"user\", content: \"Company: \" + $json.company_name + \"\\n\\nSearch results:\\n\" + JSON.stringify($json.results || $json.body || {}) }\n  ]\n}) }}"
+      },
+      "id": "agent1_llm_parse",
+      "name": "Agent 1: LLM - Identify Top 3 Competitors",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -740,
+        0
+      ],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "let names = [];\nlet errorFlag = false;\ntry {\n  const content = $input.first().json.choices[0].message.content;\n  names = JSON.parse(content);\n  if (!Array.isArray(names)) throw new Error('not an array');\n  names = names.slice(0, 3).map(n => String(n));\n} catch (e) {\n  errorFlag = true;\n  names = [];\n}\nreturn [{ json: { company_name: $('Normalize Input').first().json.company_name, competitors: names, discovery_error: errorFlag } }];"
+      },
+      "id": "parse_competitors",
+      "name": "Parse Competitor List (with fallback)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{ $json.competitors.length }}",
+              "rightValue": 1,
+              "operator": {
+                "type": "number",
+                "operation": "lt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if_discovery_failed",
+      "name": "Check: Discovery Failed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -300,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { \"error\": \"Could not discover competitors for '\" + $json.company_name + \"'. Try a more specific company name.\" } }}",
+        "options": {
+          "responseCode": 422
+        }
+      },
+      "id": "respond_discovery_error",
+      "name": "Respond: Could Not Discover Competitors",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        -80,
+        -160
+      ]
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "competitors",
+        "options": {}
+      },
+      "id": "split_competitors",
+      "name": "Split Out Competitors",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -80,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "b1",
+              "name": "competitor_name",
+              "type": "string",
+              "value": "={{ $json.competitors }}"
+            },
+            {
+              "id": "b2",
+              "name": "company_name",
+              "type": "string",
+              "value": "={{ $('Normalize Input').first().json.company_name }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "set_competitor_name",
+      "name": "Set competitor_name",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        140,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tavily.com/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.TAVILY_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.competitor_name + ' pricing features product overview', max_results: 6, topic: \"general\" }) }}"
+      },
+      "id": "agent2_web_search",
+      "name": "Agent 2: Tavily Search - Web Data",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        360,
+        20
+      ],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tavily.com/search",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.TAVILY_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ query: $json.competitor_name + ' news', max_results: 6, topic: \"news\" }) }}"
+      },
+      "id": "agent2_news_search",
+      "name": "Agent 2: Tavily Search - Recent News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        360,
+        220
+      ],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "merge_agent2",
+      "name": "Merge Web + News Data",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [
+        580,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "d1",
+              "leftValue": "={{ (!$json.web_data || Object.keys($json.web_data).length === 0) && (!$json.news_data || Object.keys($json.news_data).length === 0) }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equal"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "if_agent2_empty",
+      "name": "Check: Agent 2 Data Empty?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        800,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e1",
+              "name": "competitor_name",
+              "type": "string",
+              "value": "={{ $json.competitor_name }}"
+            },
+            {
+              "id": "e2",
+              "name": "pricing",
+              "type": "string",
+              "value": "Data unavailable"
+            },
+            {
+              "id": "e3",
+              "name": "core_features",
+              "type": "string",
+              "value": "Data unavailable"
+            },
+            {
+              "id": "e4",
+              "name": "market_positioning",
+              "type": "string",
+              "value": "Data unavailable"
+            },
+            {
+              "id": "e5",
+              "name": "recent_news",
+              "type": "string",
+              "value": "Data unavailable"
+            },
+            {
+              "id": "e6",
+              "name": "extraction_error",
+              "type": "boolean",
+              "value": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "fallback_data_unavailable",
+      "name": "Fallback: Mark Data Unavailable",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1020,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tokenfactory.nebius.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.NEBIUS_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"Qwen/Qwen3-30B-A3B-Instruct-2507\",\n  temperature: 0.2,\n  messages: [\n    { role: \"system\", content: \"You are Agent 3, a competitive-intelligence extraction agent. From raw web and news search results about ONE competitor, extract exactly these fields as strict JSON: pricing (string, or 'Not publicly disclosed'), core_features (array of 3-5 short strings), market_positioning (1-2 sentence string), recent_news (array of {headline, date, summary}, up to 3 items, or [] if none found). Never invent numbers or facts that are not supported by the provided text - if unsure, say so explicitly. Reply with ONLY the JSON object.\" },\n    { role: \"user\", content: \"Competitor: \" + $json.competitor_name + \"\\n\\nWeb results:\\n\" + JSON.stringify($json.web_data || {}) + \"\\n\\nNews results:\\n\" + JSON.stringify($json.news_data || {}) }\n  ]\n}) }}"
+      },
+      "id": "agent3_llm_extract",
+      "name": "Agent 3: LLM - Extract Pricing, Features, Positioning & News",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1020,
+        0
+      ],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "language": "javaScript",
+        "jsCode": "let profile;\ntry {\n  const content = $input.first().json.choices[0].message.content;\n  profile = JSON.parse(content);\n} catch (e) {\n  profile = {\n    pricing: 'Data unavailable', core_features: ['Data unavailable'],\n    market_positioning: 'Data unavailable', recent_news: [], extraction_error: true\n  };\n}\nprofile.competitor_name = $('Set competitor_name').first().json.competitor_name;\nreturn [{ json: profile }];"
+      },
+      "id": "parse_agent3",
+      "name": "Parse Agent 3 Extraction (with fallback)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "aggregate": "aggregateAllItemData",
+        "destinationFieldName": "competitor_profiles",
+        "options": {}
+      },
+      "id": "aggregate_profiles",
+      "name": "Aggregate Competitor Profiles",
+      "type": "n8n-nodes-base.aggregate",
+      "typeVersion": 1,
+      "position": [
+        1460,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.tokenfactory.nebius.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $vars.NEBIUS_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: \"Qwen/Qwen3-30B-A3B-Instruct-2507\",\n  temperature: 0.3,\n  messages: [\n    { role: \"system\", content: \"You are the Orchestrator agent. Compile a formatted Markdown competitor analysis briefing from the target company and an array of competitor profiles (pricing, core_features, market_positioning, recent_news). Structure: 1) One-paragraph executive summary. 2) A markdown comparison table (competitor | pricing | positioning). 3) One subsection per competitor with features and recent news. 4) A short 'Data limitations' note listing any fields marked unavailable. Output Markdown only, no extra commentary.\" },\n    { role: \"user\", content: \"Target company: \" + $('Normalize Input').first().json.company_name + \"\\n\\nCompetitor profiles:\\n\" + JSON.stringify($json.competitor_profiles) }\n  ]\n}) }}"
+      },
+      "id": "orchestrator_compile",
+      "name": "Orchestrator: LLM - Compile Briefing",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1680,
+        120
+      ],
+      "continueOnFail": true,
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 1500
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "f1",
+              "name": "company_name",
+              "type": "string",
+              "value": "={{ $('Normalize Input').first().json.company_name }}"
+            },
+            {
+              "id": "f2",
+              "name": "competitor_profiles",
+              "type": "array",
+              "value": "={{ $('Aggregate Competitor Profiles').first().json.competitor_profiles }}"
+            },
+            {
+              "id": "f3",
+              "name": "briefing_markdown",
+              "type": "string",
+              "value": "={{ $json.choices ? $json.choices[0].message.content : 'Briefing generation failed - see competitor_profiles for raw data.' }}"
+            },
+            {
+              "id": "f4",
+              "name": "generated_at",
+              "type": "string",
+              "value": "={{ $now.toISO() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "build_response",
+      "name": "Build Final Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1900,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond_success",
+      "name": "Respond: Return Briefing",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        2120,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "lw1",
+              "name": "web_data",
+              "type": "array",
+              "value": "={{ $json.results || {} }}"
+            },
+            {
+              "id": "lw2",
+              "name": "competitor_name",
+              "type": "string",
+              "value": "={{ $json.competitor_name || $('Set competitor_name').first().json.competitor_name }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "label_web_results",
+      "name": "Label Web Results",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        470,
+        -60
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ln1",
+              "name": "news_data",
+              "type": "array",
+              "value": "={{ $json.results || {} }}"
+            },
+            {
+              "id": "ln2",
+              "name": "competitor_name",
+              "type": "string",
+              "value": "={{ $json.competitor_name || $('Set competitor_name').first().json.competitor_name }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "label_news_results",
+      "name": "Label News Results",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        470,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook - Start Research": {
+      "main": [
+        [
+          {
+            "node": "Normalize Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Input": {
+      "main": [
+        [
+          {
+            "node": "Agent 1: Tavily Search - Discover Competitors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 1: Tavily Search - Discover Competitors": {
+      "main": [
+        [
+          {
+            "node": "Agent 1: LLM - Identify Top 3 Competitors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 1: LLM - Identify Top 3 Competitors": {
+      "main": [
+        [
+          {
+            "node": "Parse Competitor List (with fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Competitor List (with fallback)": {
+      "main": [
+        [
+          {
+            "node": "Check: Discovery Failed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check: Discovery Failed?": {
+      "main": [
+        [
+          {
+            "node": "Respond: Could Not Discover Competitors",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Split Out Competitors",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out Competitors": {
+      "main": [
+        [
+          {
+            "node": "Set competitor_name",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set competitor_name": {
+      "main": [
+        [
+          {
+            "node": "Agent 2: Tavily Search - Web Data",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Agent 2: Tavily Search - Recent News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 2: Tavily Search - Web Data": {
+      "main": [
+        [
+          {
+            "node": "Label Web Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 2: Tavily Search - Recent News": {
+      "main": [
+        [
+          {
+            "node": "Label News Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Web + News Data": {
+      "main": [
+        [
+          {
+            "node": "Check: Agent 2 Data Empty?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check: Agent 2 Data Empty?": {
+      "main": [
+        [
+          {
+            "node": "Fallback: Mark Data Unavailable",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Agent 3: LLM - Extract Pricing, Features, Positioning & News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Agent 3: LLM - Extract Pricing, Features, Positioning & News": {
+      "main": [
+        [
+          {
+            "node": "Parse Agent 3 Extraction (with fallback)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Agent 3 Extraction (with fallback)": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Competitor Profiles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback: Mark Data Unavailable": {
+      "main": [
+        [
+          {
+            "node": "Aggregate Competitor Profiles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Aggregate Competitor Profiles": {
+      "main": [
+        [
+          {
+            "node": "Orchestrator: LLM - Compile Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Orchestrator: LLM - Compile Briefing": {
+      "main": [
+        [
+          {
+            "node": "Build Final Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Final Response": {
+      "main": [
+        [
+          {
+            "node": "Respond: Return Briefing",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Label Web Results": {
+      "main": [
+        [
+          {
+            "node": "Merge Web + News Data",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Label News Results": {
+      "main": [
+        [
+          {
+            "node": "Merge Web + News Data",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}
